@@ -1,10 +1,24 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'screens/drive_screen.dart';
 import 'theme.dart';
 import 'transport/transport.dart';
 
-void main() => runApp(const SmartCartApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // 안드로이드: 화면을 시스템 바 뒤까지 그리고, 하단 내비게이션 바에 시스템이 깔아주는
+  // 반투명 막을 꺼서 다크 배경이 그대로 이어지게 한다. 데스크톱에서는 아무 일도 안 한다.
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarIconBrightness: Brightness.light,
+    systemNavigationBarContrastEnforced: false,
+  ));
+  runApp(const SmartCartApp());
+}
 
 class SmartCartApp extends StatefulWidget {
   const SmartCartApp({super.key});

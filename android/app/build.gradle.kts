@@ -7,7 +7,9 @@ plugins {
 android {
     namespace = "com.smartcart.smart_cart_app"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // Flutter 기본값(flutter.ndkVersion = 28.2.13676358) 대신 설치된 NDK를 쓴다.
+    // 네이티브 코드가 없어 릴리스 빌드의 심볼 정리에만 쓰이므로 새 버전으로 충분하다.
+    ndkVersion = "30.0.16248370"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

@@ -372,10 +372,11 @@ class _StatGrid extends StatelessWidget {
         unit: '%',
         sub: [
           if (power?.batteryV case final v?) '${_num(v, 1)} V',
+          // 휴대폰 카드 폭에 맞춰 짧게. 차단 상세는 경고 블록에 따로 뜬다.
           switch (power?.contactor) {
-            'closed' => '구동 전원 연결됨',
-            'open' => '구동 전원 차단됨',
-            _ => '접촉기 상태 $_none',
+            'closed' => '구동 연결',
+            'open' => '구동 차단',
+            _ => '접촉기 $_none',
           },
         ].join(' · '),
         warn: battery != null && battery <= 20,
