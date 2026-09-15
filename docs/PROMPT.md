@@ -4,7 +4,7 @@
 
 - **새로 만들 때**: 빈 폴더에서 Claude Code를 열고, 아래 "프롬프트" 구역을 통째로 복사해 첫 메시지로 보내세요.
 - **이 저장소를 받아서 이어 개발할 때**: 전부 다시 만들 필요 없습니다.
-  "`docs/PROMPT.md`의 설계 원칙을 지키면서 WebSocketTransport를 추가해줘"처럼 요청하면 됩니다.
+  "`docs/PROMPT.md`의 설계 원칙을 지키면서 휴대폰 백그라운드 처리를 추가해줘"처럼 요청하면 됩니다.
 
 ## 준비물
 
@@ -21,7 +21,9 @@
   `android/app/build.gradle.kts`의 `ndkVersion`을 설치한 버전으로 맞추세요.
 - **삼성 자동 차단기**가 켜져 있으면 USB 디버깅이 막힙니다. 설정 → 보안 및 개인정보 보호 → 자동 차단기.
 - **안드로이드 인터넷 권한**: Flutter 기본 템플릿은 개발용 빌드에만 INTERNET 권한을 넣습니다.
-  실물 카트와 통신을 붙일 때 `android/app/src/main/AndroidManifest.xml`에 추가해야 릴리스 APK에서도 연결됩니다.
+  `android/app/src/main/AndroidManifest.xml`에 없으면 릴리스 APK에서만 연결이 안 됩니다. (이 저장소에는 추가되어 있음)
+- **소켓 테스트**: `flutter_test`는 HTTP 클라이언트를 가짜로 바꿔 두어 실제 WebSocket 연결이 실패합니다.
+  실제 소켓을 쓰는 테스트에서는 `HttpOverrides.global = null`로 잠시 풀고, 가짜 시계를 쓰는 `testWidgets` 대신 `test`로 돌리세요.
 
 ---
 
@@ -40,16 +42,34 @@ UWB 태그는 사람이 들고 다니고, 자동 모드에서 카트가 그 사�
 flutter create --org com.smartcart --platforms=android,windows,web --project-name smart_cart_app .
 
 lib/
-  main.dart                 진입점, transport 교체 지점, 안드로이드 시스템 바 설정
-  theme.dart                다크 색상·타이포 토큰
-  models/telemetry.dart     JSON 스키마 모델 (Telemetry, DriveCommand, DriveMode)
-  transport/transport.dart  CartTransport 인터페이스, CartLink, MockTransport, FaultInjection
-  widgets/lidar_view.dart   라이다 점군 (CustomPainter)
-  widgets/joystick.dart     데드맨 조이스틱
-  screens/drive_screen.dart 주행 화면 (수동/자동)
+  main.dart                          진입점, 빌드 환경에 따라 전송 방식 선택, 안드로이드 시스템 바 설정
+  env.dart                           빌드 환경(CART_ENV, CART_URL) 해석
+  theme.dart                         다크 색상·타이포 토큰
+  models/telemetry.dart              JSON 스키마 모델 (Telemetry, DriveCommand, DriveMode)
+  transport/transport.dart           CartTransport 인터페이스, CartLink, MockTransport, FaultInjection
+  transport/websocket_transport.dart WebSocket 연결 (dart:io, 재접속)
+  widgets/lidar_view.dart            라이다 점군 (CustomPainter)
+  widgets/joystick.dart              데드맨 조이스틱
+  screens/drive_screen.dart          주행 화면 (수동/자동)
 test/widget_test.dart
+android/app/src/main/AndroidManifest.xml 에 INTERNET 권한 추가
+
+## 빌드 환경
+환경은 빌드할 때 --dart-define으로만 정한다. 앱 안에 전환 스위치를 두지 않는다(실수로 누를 수 있으면 언젠가 누른다).
+- CART_ENV=simulation (기본값): 앱 안의 MockTransport. 옵션을 빠뜨리면 이것이 된다(실차에 잘못 붙는 것보다 안전).
+- CART_ENV=server + CART_URL=ws://...: PC 등의 테스트 서버에 WebSocket 연결.
+- CART_ENV=vehicle + CART_URL=ws://...: 실제 카트에 WebSocket 연결.
+- server·vehicle인데 CART_URL이 없거나 ws/wss가 아니거나 호스트가 없으면, 또는 CART_ENV를 모르면
+  연결하지 않고 "빌드 설정 오류" 화면(이유와 빌드 예시)만 보여준다.
+- `const isSimulationBuild = String.fromEnvironment('CART_ENV', defaultValue: 'simulation') == 'simulation'`처럼
+  컴파일 타임 상수로 만들고, MockTransport 생성과 고장 주입 패널을 이 상수로 감싸서
+  시뮬레이션이 아닌 빌드에서는 트리 셰이킹으로 코드가 빠지게 한다.
+- 화면 상단(상태바 맨 앞)에 환경 배지를 항상 표시: 시뮬레이션·테스트 서버는 액센트색, 실차는 경고색.
+  연결 중 경고 블록에는 연결 대상(시뮬레이션이면 "앱 안의 가짜 카트", 아니면 ws 주소)을 표시.
 
 ## 통신 스키마
+WebSocket 텍스트 프레임 하나에 JSON 하나.
+
 카트 -> 앱 텔레메트리 (10Hz):
 {"t":0,"link":{"state":"ok","rtt_ms":18},
  "power":{"battery_pct":78,"battery_v":27.1,"contactor":"closed","estop":false},
@@ -77,7 +97,8 @@ test/widget_test.dart
 
 ## 설계 원칙
 - 전송 계층은 CartTransport 인터페이스로 격리. 화면은 CartTransport와 CartLink만 알고 WebSocket을 모른다.
-  main.dart에서 MockTransport를 WebSocketTransport로 한 줄만 바꿔 끼운다.
+- WebSocketTransport: 연결 유지와 JSON 변환만. 연결 타임아웃 3초, 끊기면 0.5초부터 최대 5초까지 간격을 늘리며 재접속.
+  깨진 프레임은 버린다. 연결 안 됐을 때 send는 조용히 무시(50ms 뒤 다음 명령이 감).
 - CartLink(전송 방식과 무관)가 맡는 일:
   - 20Hz 명령 송신
   - 텔레메트리 워치독: 500ms 안 오면 lost. 소켓 상태가 아니라 수신 간격으로 판정
@@ -106,11 +127,11 @@ test/widget_test.dart
   왼쪽: 상태바·경고·라이다. 오른쪽(폭 min(460, 화면폭×0.55)): 수치 카드와 고장 주입(스크롤) + 조작 카드.
 - 그 외(휴대폰 세로): 상태바·경고 / 스크롤(라이다 높이 320, 수치 카드, 고장 주입) / 조작 카드.
 - 경고 영역은 화면 높이 일부로 제한하고 넘치면 스크롤. 경고가 쌓여도 조작 카드를 밀어내면 안 됨.
-- 상태바: 연결 상태 점·문구·RTT, 오른쪽에 카트 보고 모드.
+- 상태바: 환경 배지, 연결 상태 점·문구·RTT, 오른쪽에 카트 보고 모드.
 - 수치 카드 2열: 배터리(%, "27.3 V · 구동 연결"), 태그 거리(방향·태그 상태), 출력 좌/우(duty %, 전류),
   속도(엔코더 없으면 "—"와 "엔코더 미장착"), 피치(롤·방위), 측면 근접(ToF 좌/우, 낙차), 라이다 유효율.
   휴대폰 카드 폭에서 부가 설명이 잘리지 않게 짧게.
-- 경고 블록: 연결 중 / 연결 끊김("마지막 수신 N초 전 · 명령이 200ms 끊기면 카트가 모터 출력을 끕니다 (제동 아님)")
+- 경고 블록: 연결 중(연결 대상) / 연결 끊김("마지막 수신 N초 전 · 명령이 200ms 끊기면 카트가 모터 출력을 끕니다 (제동 아님)")
   / 자동 모드 해제됨(이유) / 구동 전원 차단됨(E-stop 여부, 제동이 아니라 경사에서 굴러갈 수 있음) / 고장 코드 목록.
 - 연결이 끊기면 라이다·수치를 흐리게(투명도 0.35)하고 조이스틱 비활성. 고장 주입 패널은 흐리게 하지 않음.
 - 조작 카드: [수동|자동] 세그먼트. 수동이면 조이스틱과 스로틀/조향 값, 자동이면 태그 방향 원과 거리/방향.
@@ -139,10 +160,15 @@ test/widget_test.dart
 ## 테스트
 - 설계 예시 JSON 파싱, 섹션 누락·모르는 고장 코드
 - 명령 JSON에 mode 포함
+- EnvConfig: 기본값 시뮬레이션, server·vehicle의 주소 누락·잘못된 스킴·빈 호스트 오류, 모르는 환경 이름 오류
+- WebSocketTransport: 로컬 HttpServer로 수신·송신, 깨진 프레임 무시, 서버가 끊으면 재접속
 - CartLink: 500ms 끊김 → lost·조작 해제, 복구 후 손 떼기 전까지 입력 무시
 - CartLink 자동 모드: 요청 차단 조건, 확정, 카트가 해제, 거부(약 1초), 링크 끊김
-- 화면: 통신 끊기 토글 → 끊김 표시, 배터리 저하·E-stop 표시와 화면에 "정지" 단어 없음, 자동 전환 후 태그 끊김
+- 화면: 시뮬레이션 배지, 통신 끊기 토글 → 끊김 표시, 배터리 저하·E-stop 표시와 화면에 "정지" 단어 없음,
+  자동 전환 후 태그 끊김, 실차 환경의 배지·연결 주소·고장 주입 패널 없음, 설정 오류 화면
 - 레이아웃: 휴대폰 세로 390×844, 가로 844×390에서 넘침 없음(수동·자동 모두)
 
 작업이 끝나면 flutter analyze 0건, flutter test 전부 통과를 확인해줘.
+실차 빌드(--dart-define=CART_ENV=vehicle ...)의 컴파일 결과물(Windows면 data/app.so)에
+MockTransport에만 있는 문자열이 없는지도 확인해줘.
 ````

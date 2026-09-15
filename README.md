@@ -3,24 +3,52 @@
 UWB 태그를 든 사람을 따라가는 스마트카트를 조작하고 상태를 보는 Flutter 앱입니다.
 안드로이드 휴대폰과 Windows에서 동작합니다.
 
-> **현재 상태**: 가짜 카트(`MockTransport`)로 동작합니다. 실물 카트 연결(`WebSocketTransport`)은 아직 없습니다.
+> **현재 상태**: 앱은 가짜 카트(시뮬레이션)와 WebSocket 연결(테스트 서버·실차)을 모두 지원합니다.
+> 카트 쪽 펌웨어와 WebSocket 서버는 아직 없습니다.
 
 ## 안드로이드에 설치해서 써보기
 
-[Releases](../../releases)에서 `app-release.apk`를 받아 휴대폰에 설치합니다.
+[Releases](../../releases)에서 `app-release.apk`를 받아 휴대폰에 설치합니다. 릴리스 APK는 **시뮬레이션 빌드**입니다.
 
 - 스토어 밖에서 받은 앱이라 설치할 때 **"출처를 알 수 없는 앱 설치" 허용**이 필요합니다.
 - 삼성 **자동 차단기**가 켜져 있으면 설치가 막힙니다. (설정 → 보안 및 개인정보 보호 → 자동 차단기)
 - 테스트용 서명(디버그 키)이라 스토어 배포용이 아닙니다.
 - 저장소가 비공개라 초대받은 사람만 받을 수 있습니다.
 
+## 빌드 환경: 시뮬레이션 / 테스트 서버 / 실차
+
+환경은 **빌드할 때만** 정합니다. 앱 안에는 전환 스위치가 없습니다. 실수로 누를 수 있는 스위치는 언젠가 누르게 되기 때문입니다.
+
+| 환경 | 연결 대상 | 화면 상단 배지 | 고장 주입 패널 |
+|---|---|---|---|
+| `simulation` (기본값) | 앱 안의 가짜 카트 | 파란 **시뮬레이션** | 있음 |
+| `server` | PC 등의 테스트 서버 (WebSocket) | 파란 **테스트 서버** | 없음 |
+| `vehicle` | 실제 카트 (WebSocket) | 붉은 **실차** | 없음 |
+
+```bash
+# 시뮬레이션 (아무 옵션 없으면 이것)
+flutter run
+
+# 테스트 서버
+flutter run --dart-define=CART_ENV=server --dart-define=CART_URL=ws://192.168.0.10:8765
+
+# 실차
+flutter build apk --release --dart-define=CART_ENV=vehicle --dart-define=CART_URL=ws://192.168.4.1:8765
+```
+
+- **옵션을 빠뜨리면 시뮬레이션**이 됩니다. 설정을 빠뜨린 빌드가 실차에 붙는 것보다 안 붙는 쪽이 안전합니다.
+- `server`·`vehicle`인데 `CART_URL`이 없거나 `ws://`로 시작하지 않으면, 연결하지 않고 **빌드 설정 오류** 화면만 띄웁니다.
+- 시뮬레이션이 아닌 빌드에는 **가짜 카트 코드와 고장 주입 패널이 아예 들어가지 않습니다** (컴파일 시점에 제거).
+- 연결이 끊기면 0.5초부터 최대 5초 간격으로 스스로 재접속합니다.
+- 위 IP와 포트는 예시입니다. 카트 쪽 서버 주소가 정해지면 그 값을 쓰세요.
+
 ## 화면 구성
 
-- **상태바**: 연결 상태·지연(RTT), 카트가 보고한 실제 모드
+- **상태바**: 빌드 환경 배지, 연결 상태·지연(RTT), 카트가 보고한 실제 모드
 - **라이다**: 점군과 UWB 태그(사람) 위치
 - **수치 카드**: 배터리(%·전압), 태그 거리, 모터 출력·전류, 속도, 자세, 측면 근접, 라이다 유효율
 - **조작**: [수동 | 자동] 전환, 데드맨 조이스틱 / 태그 추종 표시
-- **고장 주입** (Mock 전용): 통신 끊기, 태그 신호 끊김, 배터리 저하, E-stop
+- **고장 주입** (시뮬레이션 전용): 통신 끊기, 태그 신호 끊김, 배터리 저하, E-stop
 
 ## 개발 환경
 
@@ -39,26 +67,29 @@ flutter run -d <기기ID>          # 휴대폰에서 실행
 flutter build apk --release     # build/app/outputs/flutter-apk/app-release.apk
 ```
 
-설치 중 막히는 부분(스마트 앱 제어, NDK, USB 디버깅, 인터넷 권한)은 [docs/PROMPT.md의 알려진 함정](docs/PROMPT.md#알려진-함정)을 보세요.
+설치 중 막히는 부분(스마트 앱 제어, NDK, USB 디버깅)은 [docs/PROMPT.md의 알려진 함정](docs/PROMPT.md#알려진-함정)을 보세요.
 
 ## 코드 구조
 
 ```
 lib/
-  main.dart                 진입점. 전송 방식을 여기서 한 줄로 교체
-  theme.dart                다크 색상·타이포 토큰
-  models/telemetry.dart     통신 JSON 모델
-  transport/transport.dart  CartTransport 인터페이스, CartLink(명령 송신·워치독·모드), MockTransport
-  widgets/lidar_view.dart   라이다 점군
-  widgets/joystick.dart     데드맨 조이스틱
-  screens/drive_screen.dart 주행 화면
-test/widget_test.dart       파싱·링크·모드·화면·휴대폰 레이아웃 테스트
-docs/PROMPT.md              Claude Code로 같은 설계를 재현·확장하는 프롬프트
+  main.dart                          진입점. 빌드 환경에 따라 전송 방식 선택
+  env.dart                           빌드 환경(CART_ENV, CART_URL) 해석
+  theme.dart                         다크 색상·타이포 토큰
+  models/telemetry.dart              통신 JSON 모델
+  transport/transport.dart           CartTransport 인터페이스, CartLink(명령 송신·워치독·모드), MockTransport
+  transport/websocket_transport.dart 실차·테스트 서버용 WebSocket 연결 (재접속)
+  widgets/lidar_view.dart            라이다 점군
+  widgets/joystick.dart              데드맨 조이스틱
+  screens/drive_screen.dart          주행 화면
+test/widget_test.dart                파싱·환경·WebSocket·링크·모드·화면·휴대폰 레이아웃 테스트
+docs/PROMPT.md                       Claude Code로 같은 설계를 재현·확장하는 프롬프트
 ```
 
 ## 통신 규약
 
 카트 펌웨어를 만드는 사람을 위한 요약입니다. 필드별 세부 규칙은 [docs/PROMPT.md](docs/PROMPT.md)에 있습니다.
+전송은 WebSocket 텍스트 프레임 하나에 JSON 하나입니다.
 
 **카트 → 앱 텔레메트리 (10Hz)**
 
@@ -95,8 +126,16 @@ docs/PROMPT.md              Claude Code로 같은 설계를 재현·확장하는
 - **바퀴를 바닥에서 띄운 상태**로 시작
 - 물리 E-stop이 접촉기를 확실히 끊는지 먼저 확인
 - 주행 중 휴대폰 Wi-Fi를 꺼서 카트가 0.2초 안에 출력을 끄는지 확인
+- 조이스틱을 오른쪽으로 밀었을 때 실제로 오른쪽으로 도는지, 태그를 왼쪽에 두었을 때 `bearing_deg`가 음수인지 확인
 
 ## Claude Code로 이어서 개발하기
 
 [docs/PROMPT.md](docs/PROMPT.md)에 이 앱의 설계 전체를 담은 프롬프트가 있습니다.
 저장소를 받은 뒤 Claude Code에서 "`docs/PROMPT.md`의 설계 원칙을 지키면서 …해줘"라고 요청하면 됩니다.
+
+## 라이선스
+
+[MIT](LICENSE). 저작권 표시를 남기면 누구나 자유롭게 쓰고 고치고 배포할 수 있습니다.
+
+이 앱은 실제로 움직이는 카트를 조작합니다. 코드는 **보증 없이** 제공되며,
+실차에 쓰기 전에 카트 쪽 안전장치(명령 끊김 감시, E-stop, 제동)를 반드시 직접 확인하세요.

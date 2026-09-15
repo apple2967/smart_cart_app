@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../env.dart';
 import '../models/telemetry.dart';
 import '../theme.dart';
 import '../transport/transport.dart';
@@ -12,9 +13,21 @@ import '../widgets/lidar_view.dart';
 ///
 /// [CartLink]만 알고, 그 뒤가 WebSocket인지 Mock인지는 모른다.
 class DriveScreen extends StatelessWidget {
-  const DriveScreen({super.key, required this.link, this.faultInjection});
+  const DriveScreen({
+    super.key,
+    required this.link,
+    required this.env,
+    this.target,
+    this.faultInjection,
+  });
 
   final CartLink link;
+
+  /// 빌드 환경. 상단에 항상 표시해서 시뮬레이션과 실차를 헷갈리지 않게 한다.
+  final CartEnv env;
+
+  /// 연결 대상 주소. 시뮬레이션이면 null.
+  final Uri? target;
 
   /// Mock 전송일 때만 넘어온다. null이면 고장 주입 패널을 숨긴다.
   final FaultInjection? faultInjection;
@@ -55,7 +68,7 @@ class DriveScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _StatusBar(link: link),
+              _StatusBar(link: link, env: env),
               _gap,
               _cappedAlerts(box, 0.4),
               Expanded(
@@ -76,8 +89,12 @@ class DriveScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       _dimWhenStale(_StatGrid(telemetry: link.latest)),
-                      // 고장 주입 패널은 흐리게 하지 않는다 — 끊긴 상태에서 되돌려야 하니까
-                      if (fi != null) ...[_gap, _FaultInjectionCard(faults: fi)],
+                      // 고장 주입 패널은 흐리게 하지 않는다 — 끊긴 상태에서 되돌려야 하니까.
+                      // isSimulationBuild가 false인 빌드에서는 패널 코드가 통째로 빠진다.
+                      if (isSimulationBuild && fi != null) ...[
+                        _gap,
+                        _FaultInjectionCard(faults: fi),
+                      ],
                     ],
                   ),
                 ),
@@ -96,7 +113,7 @@ class DriveScreen extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _StatusBar(link: link),
+        _StatusBar(link: link, env: env),
         _gap,
         _cappedAlerts(box, 0.3),
         Expanded(
@@ -108,7 +125,10 @@ class DriveScreen extends StatelessWidget {
               ),
               _gap,
               _dimWhenStale(_StatGrid(telemetry: link.latest)),
-              if (fi != null) ...[_gap, _FaultInjectionCard(faults: fi)],
+              if (isSimulationBuild && fi != null) ...[
+                _gap,
+                _FaultInjectionCard(faults: fi),
+              ],
             ],
           ),
         ),
@@ -122,7 +142,9 @@ class DriveScreen extends StatelessWidget {
   Widget _cappedAlerts(BoxConstraints box, double maxFraction) =>
       ConstrainedBox(
         constraints: BoxConstraints(maxHeight: box.maxHeight * maxFraction),
-        child: SingleChildScrollView(child: _Alerts(link: link)),
+        child: SingleChildScrollView(
+          child: _Alerts(link: link, target: target),
+        ),
       );
 
   Widget _dimWhenStale(Widget child) => AnimatedOpacity(
@@ -133,9 +155,10 @@ class DriveScreen extends StatelessWidget {
 }
 
 class _StatusBar extends StatelessWidget {
-  const _StatusBar({required this.link});
+  const _StatusBar({required this.link, required this.env});
 
   final CartLink link;
+  final CartEnv env;
 
   @override
   Widget build(BuildContext context) {
@@ -149,6 +172,8 @@ class _StatusBar extends StatelessWidget {
 
     return Row(
       children: [
+        _EnvBadge(env: env),
+        const SizedBox(width: 12),
         Container(
           width: 8,
           height: 8,
@@ -170,10 +195,42 @@ class _StatusBar extends StatelessWidget {
   }
 }
 
+/// 빌드 환경 배지. 실제로 움직이는 환경(실차)만 주의 색으로 칠한다.
+class _EnvBadge extends StatelessWidget {
+  const _EnvBadge({required this.env});
+
+  final CartEnv env;
+
+  @override
+  Widget build(BuildContext context) {
+    final (background, foreground) = switch (env) {
+      CartEnv.vehicle => (CartColors.warnBg, CartColors.warn),
+      CartEnv.simulation ||
+      CartEnv.server =>
+        (CartColors.accent.withValues(alpha: 0.16), CartColors.accent),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(CartRadii.card),
+      ),
+      child: Text(
+        env.label,
+        style: CartText.label.copyWith(
+          color: foreground,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+}
+
 class _Alerts extends StatelessWidget {
-  const _Alerts({required this.link});
+  const _Alerts({required this.link, required this.target});
 
   final CartLink link;
+  final Uri? target;
 
   @override
   Widget build(BuildContext context) {
@@ -181,10 +238,16 @@ class _Alerts extends StatelessWidget {
     final faults = link.latest?.faults ?? const <String>[];
     final ageSec = link.telemetryAge.inMilliseconds / 1000;
     final tagOk = link.latest?.uwb?.tag == 'ok';
+    final target = this.target;
 
     final blocks = <Widget>[
       if (link.status == LinkStatus.connecting)
-        const _Block(title: '카트 연결 중…', detail: '텔레메트리를 기다리는 중입니다'),
+        _Block(
+          title: '카트 연결 중…',
+          detail: target == null
+              ? '앱 안의 가짜 카트를 기다리는 중입니다'
+              : '$target 에 연결하는 중입니다',
+        ),
       if (link.status == LinkStatus.lost)
         _Block(
           warn: true,

@@ -1,11 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:smart_cart_app/env.dart';
 import 'package:smart_cart_app/main.dart';
 import 'package:smart_cart_app/models/telemetry.dart';
+import 'package:smart_cart_app/screens/drive_screen.dart';
+import 'package:smart_cart_app/theme.dart';
 import 'package:smart_cart_app/transport/transport.dart';
+import 'package:smart_cart_app/transport/websocket_transport.dart';
 
 /// 설계 문서의 텔레메트리 예시 그대로.
 const _specExample = '''
@@ -88,6 +93,81 @@ void main() {
         'deadman': false,
       });
     });
+  });
+
+  group('EnvConfig', () {
+    test('이 테스트 빌드는 시뮬레이션이다', () {
+      expect(isSimulationBuild, isTrue);
+      expect(EnvConfig.current.env, CartEnv.simulation);
+      expect(EnvConfig.current.error, isNull);
+    });
+
+    test('테스트 서버·실차는 ws 주소가 없거나 틀리면 오류', () {
+      expect(EnvConfig.parse('vehicle', '').error, isNotNull);
+      expect(EnvConfig.parse('server', 'http://192.168.0.10:8765').error,
+          isNotNull);
+      expect(EnvConfig.parse('vehicle', 'ws://').error, isNotNull);
+
+      final ok = EnvConfig.parse('vehicle', 'ws://192.168.4.1:8765');
+      expect(ok.error, isNull);
+      expect(ok.env, CartEnv.vehicle);
+      expect(ok.url?.host, '192.168.4.1');
+      expect(ok.url?.port, 8765);
+    });
+
+    test('모르는 환경 이름은 오류', () {
+      final c = EnvConfig.parse('field', 'ws://192.168.4.1:8765');
+      expect(c.env, isNull);
+      expect(c.error, isNotNull);
+    });
+  });
+
+  // 실제 소켓을 쓰므로 가짜 시계(testWidgets)가 아니라 일반 test로 돌린다.
+  test('WebSocketTransport: 수신·송신, 깨진 프레임 무시, 서버가 끊으면 재접속', () async {
+    // flutter_test는 기본적으로 HTTP를 가짜로 바꿔 두므로 이 테스트에서만 실제 소켓을 쓴다
+    final saved = HttpOverrides.current;
+    HttpOverrides.global = null;
+    addTearDown(() => HttpOverrides.global = saved);
+
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    var accepted = Completer<WebSocket>();
+    server.transform(WebSocketTransformer()).listen((ws) {
+      if (!accepted.isCompleted) accepted.complete(ws);
+    });
+
+    final transport =
+        WebSocketTransport(Uri.parse('ws://127.0.0.1:${server.port}'));
+    addTearDown(transport.close);
+    const timeout = Duration(seconds: 3);
+
+    final first = await accepted.future.timeout(timeout);
+    final received = transport.telemetry.first;
+    first.add('{not json');
+    first.add(_specExample);
+    expect((await received.timeout(timeout)).drive?.dutyL, 34);
+
+    final command = Completer<String>();
+    first.listen((m) {
+      if (!command.isCompleted) command.complete(m as String);
+    });
+    transport.send(const DriveCommand(
+      seq: 7,
+      mode: DriveMode.manual,
+      throttle: 0.5,
+      steer: 0,
+      deadman: true,
+    ));
+    final sent =
+        jsonDecode(await command.future.timeout(timeout)) as Map<String, dynamic>;
+    expect(sent['seq'], 7);
+    expect(sent['mode'], 'manual');
+    expect(sent['deadman'], isTrue);
+
+    accepted = Completer<WebSocket>();
+    await first.close();
+    final second = await accepted.future.timeout(timeout);
+    expect(identical(second, first), isFalse);
   });
 
   // testWidgets는 가짜 시계를 쓰므로 타이머를 실제로 기다리지 않는다.
@@ -189,11 +269,14 @@ void main() {
     link.dispose();
   });
 
-  testWidgets('좁은 화면: 통신 끊기 토글로 연결 끊김 화면 전환', (tester) async {
+  testWidgets('좁은 화면: 시뮬레이션 배지, 통신 끊기 토글로 연결 끊김 화면 전환',
+      (tester) async {
     _setSurface(tester, const Size(800, 1600));
 
     await tester.pumpWidget(const SmartCartApp());
     expect(find.text('연결 중'), findsOneWidget);
+    expect(find.text('시뮬레이션'), findsOneWidget);
+    expect(find.text('앱 안의 가짜 카트를 기다리는 중입니다'), findsOneWidget);
 
     await tester.pump(const Duration(milliseconds: 250));
     expect(find.text('연결됨'), findsOneWidget);
@@ -243,6 +326,34 @@ void main() {
     expect(find.text('자동 모드 해제됨'), findsOneWidget);
     expect(find.text('수동 주행'), findsOneWidget);
     expect(find.text('자동 전환 불가 · 태그 신호 없음'), findsOneWidget);
+  });
+
+  testWidgets('실차 환경: 주의색 배지와 연결 주소가 보이고 고장 주입 패널은 없다',
+      (tester) async {
+    _setSurface(tester, const Size(1280, 1200));
+    final link = CartLink(_FakeTransport());
+
+    await tester.pumpWidget(MaterialApp(
+      theme: buildCartTheme(),
+      home: DriveScreen(
+        link: link,
+        env: CartEnv.vehicle,
+        target: Uri.parse('ws://192.168.4.1:8765'),
+      ),
+    ));
+    expect(find.text('실차'), findsOneWidget);
+    expect(find.text('시뮬레이션'), findsNothing);
+    expect(find.textContaining('ws://192.168.4.1:8765'), findsOneWidget);
+    expect(find.text('고장 주입 · Mock 전용'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    link.dispose();
+  });
+
+  testWidgets('설정이 잘못된 빌드는 연결하지 않고 오류 화면만 보여준다', (tester) async {
+    await tester.pumpWidget(SmartCartApp(config: EnvConfig.parse('vehicle', '')));
+    expect(find.text('빌드 설정 오류'), findsOneWidget);
+    expect(find.text('수동 주행'), findsNothing);
   });
 
   // 레이아웃이 넘치면 Flutter가 예외를 던지므로, 화면을 띄우는 것만으로 검사가 된다.
