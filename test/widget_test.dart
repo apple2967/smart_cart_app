@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,9 +9,12 @@ import 'package:smart_cart_app/env.dart';
 import 'package:smart_cart_app/main.dart';
 import 'package:smart_cart_app/models/telemetry.dart';
 import 'package:smart_cart_app/screens/drive_screen.dart';
+import 'package:smart_cart_app/sim/cart_simulator.dart';
 import 'package:smart_cart_app/theme.dart';
 import 'package:smart_cart_app/transport/transport.dart';
 import 'package:smart_cart_app/transport/websocket_transport.dart';
+
+import '../tool/cart_server.dart' show CartServer, LinkShaper, NetConditions;
 
 /// 설계 문서의 텔레메트리 예시 그대로.
 const _specExample = '''
@@ -127,6 +131,139 @@ void main() {
           .firstMatch(pubspec);
       expect(match?.group(1), appVersion);
     });
+  });
+
+  test('명령 JSON 읽기: 되돌리면 같고, 이상한 값은 가장 안전한 쪽으로', () {
+    const cmd = DriveCommand(
+      seq: 9,
+      mode: DriveMode.follow,
+      throttle: 0.25,
+      steer: -0.5,
+      deadman: true,
+    );
+    expect(DriveCommand.fromJson(cmd.toJson()).toJson(), cmd.toJson());
+
+    final weird = DriveCommand.fromJson({
+      'mode': 'turbo',
+      'throttle': 7,
+      'steer': double.nan,
+      'deadman': 'yes',
+    });
+    expect(weird.mode, DriveMode.manual);
+    expect(weird.throttle, 0); // 최대치로 자르지 않고 0
+    expect(weird.steer, 0);
+    expect(weird.deadman, isFalse);
+  });
+
+  test('CartSimulator: 명령이 200ms 끊기면 출력 0, 태그가 없으면 follow 거부', () {
+    final sim = CartSimulator(random: math.Random(1));
+    const drive = DriveCommand(
+      seq: 1,
+      mode: DriveMode.manual,
+      throttle: 0.5,
+      steer: 0,
+      deadman: true,
+    );
+    for (var i = 0; i < 5; i++) {
+      sim.receive(drive);
+      sim.step();
+    }
+    expect(sim.dutyL, greaterThan(40));
+
+    for (var i = 0; i < 10; i++) {
+      sim.step();
+    }
+    expect(sim.dutyL, 0);
+
+    const follow = DriveCommand(
+      seq: 2,
+      mode: DriveMode.follow,
+      throttle: 0,
+      steer: 0,
+      deadman: false,
+    );
+    sim.tagLost = true;
+    sim.receive(follow);
+    sim.step();
+    expect(sim.mode, DriveMode.manual);
+
+    sim.tagLost = false;
+    sim.receive(follow);
+    sim.step();
+    expect(sim.mode, DriveMode.follow);
+  });
+
+  test('LinkShaper: 지연·손실이 있어도 순서는 그대로, 붙잡으면 몰려서 나온다', () async {
+    final got = <String>[];
+    final ages = <int>[];
+    final shaper = LinkShaper(
+      (message, queuedMs) {
+        got.add(message);
+        ages.add(queuedMs);
+      },
+      random: math.Random(7),
+    )..conditions =
+        const NetConditions(delayMs: 20, jitterMs: 40, lossPercent: 30);
+    addTearDown(shaper.close);
+
+    for (var i = 0; i < 20; i++) {
+      shaper.push('$i');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+    expect(got, [for (var i = 0; i < 20; i++) '$i']);
+
+    got.clear();
+    ages.clear();
+    shaper
+      ..conditions = const NetConditions()
+      ..holdFor(const Duration(milliseconds: 300));
+    for (var i = 0; i < 3; i++) {
+      shaper.push('h$i');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(got, isEmpty);
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(got, ['h0', 'h1', 'h2']);
+    expect(ages.first, greaterThanOrEqualTo(250));
+  });
+
+  test('테스트 서버: 앱이 붙어 조작하고, 음영이면 끊김 판정, 서버가 끊어도 다시 붙는다', () async {
+    final saved = HttpOverrides.current;
+    HttpOverrides.global = null;
+    addTearDown(() => HttpOverrides.global = saved);
+
+    final server = CartServer(random: math.Random(3));
+    final port = await server.start(port: 0, address: InternetAddress.loopbackIPv4);
+    addTearDown(server.close);
+
+    final link = CartLink(WebSocketTransport(Uri.parse('ws://127.0.0.1:$port')));
+    addTearDown(link.dispose);
+
+    Future<void> waitFor(String what, bool Function() condition) async {
+      final watch = Stopwatch()..start();
+      while (!condition()) {
+        if (watch.elapsed > const Duration(seconds: 4)) fail('시간 초과: $what');
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    }
+
+    await waitFor('연결', () => link.status == LinkStatus.live);
+    expect(server.clientCount, 1);
+
+    // 조이스틱 명령이 서버의 가짜 카트까지 닿는다
+    link.hold(0.6, 0);
+    await waitFor('가짜 카트 출력', () => server.sim.dutyL > 30);
+    link.release();
+
+    // Wi-Fi 음영 1초: 앱은 500ms 뒤 끊김으로 보고, 몰려온 뒤 다시 연결됨으로
+    expect(server.control('hold', {'ms': '1000'}), contains('1000ms'));
+    await waitFor('끊김 판정', () => link.status == LinkStatus.lost);
+    await waitFor('복구', () => link.status == LinkStatus.live);
+
+    // 서버가 연결을 끊으면 앱이 스스로 다시 붙는다
+    server.control('kick', {});
+    expect(server.clientCount, 0);
+    await waitFor('재접속', () => server.clientCount == 1);
   });
 
   // 실제 소켓을 쓰므로 가짜 시계(testWidgets)가 아니라 일반 test로 돌린다.

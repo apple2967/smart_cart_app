@@ -169,14 +169,33 @@ WebSocket 텍스트 프레임 하나에 JSON 하나.
   E-stop이면 출력 즉시 0.
 - follow 제어(펌웨어 흉내): 태그 방향으로 조향, 1.2 m보다 멀면 전진.
 - 고장 주입 토글: 통신 끊기, 태그 신호 끊김, 배터리 저하(앱이 모르는 코드 "bms_cell_imbalance" 포함), E-stop.
+- 가짜 카트 로직은 Flutter에 의존하지 않는 lib/sim/cart_simulator.dart(CartSimulator: receive, step, telemetryJson)에 두고,
+  앱의 MockTransport(10Hz로 step + 고장 주입 반영)와 PC 테스트 서버가 함께 쓴다.
+
+## PC 테스트 서버 (tool/cart_server.dart)
+- `dart run tool/cart_server.dart [--port 8765]`. 0.0.0.0에 바인드하고, 시작할 때 PC의 IPv4 주소 목록·앱 빌드 예시·방화벽 안내 출력.
+- 같은 HttpServer에서 WebSocket 업그레이드 요청은 앱 연결, 일반 HTTP GET은 조작 API. 조작 API는 루프백(서버를 실행한 PC)에서만 허용.
+- 서버 창 콘솔 명령과 HTTP 경로가 같은 control(command, args)를 쓴다:
+  status, net delay= jitter= loss=, preset good|weak|bad, hold <ms>, kick, fault tag=off|on estop=on|off battery=low|ok.
+- 앱 연결마다 방향별 LinkShaper(서버→앱 텔레메트리, 앱→서버 명령).
+  WebSocket은 TCP라 메시지가 사라지거나 순서가 바뀌지 않는다. 그래서 손실은 "재전송 대기 200~600ms 멈춤 → 몰림"으로 흉내 내고,
+  하나의 큐로 순서를 항상 지킨다. hold는 그 시간 동안 양방향을 붙잡았다가 한꺼번에 내보낸다(Wi-Fi 음영).
+- 200ms 넘게 늦게 도착한 명령을 세고 1초마다 경고한다. 규약에 보낸 시각이 없어 카트가 오래된 명령을 구분할 수 없다는 걸 보여주기 위함.
+- DriveCommand.fromJson은 이상한 값을 안전한 쪽으로 읽는다: 모르는 모드는 manual, 범위(-1~1) 밖이거나 NaN인
+  throttle/steer는 0(최대치로 자르지 않음 — 깨진 값을 최대 출력으로 실행하면 안 됨), deadman은 true일 때만 true.
 
 ## 테스트
 - 설계 예시 JSON 파싱, 섹션 누락·모르는 고장 코드
-- 명령 JSON에 mode 포함
+- 명령 JSON에 mode 포함, 명령 JSON 읽기(되돌리면 같음, 이상한 값은 안전한 쪽)
 - EnvConfig: 기본값 시뮬레이션, server·vehicle의 주소 누락·잘못된 스킴·빈 호스트 오류, 모르는 환경 이름 오류
+- 앱 버전 상수와 pubspec.yaml version 일치
+- CartSimulator: 명령 200ms 끊기면 출력 0, 태그 없으면 follow 거부
+- LinkShaper: 지연·손실에도 순서 유지, hold면 몰려서 나옴
 - WebSocketTransport: 로컬 HttpServer로 수신·송신, 깨진 프레임 무시, 서버가 끊으면 재접속
+- 테스트 서버 통합: WebSocketTransport + CartLink로 붙어 조작이 가짜 카트에 닿음, hold 1초면 lost 후 복구, kick 후 재접속
 - CartLink: 500ms 끊김 → lost·조작 해제, 복구 후 손 떼기 전까지 입력 무시
 - CartLink 자동 모드: 요청 차단 조건, 확정, 카트가 해제, 거부(약 1초), 링크 끊김
+- CartLink·앱 수명주기: 가려지면 조작 해제(자동 유지), 사라지면 자동도 해제, 돌아와도 재개 안 함
 - 화면: 시뮬레이션 배지, 통신 끊기 토글 → 끊김 표시, 배터리 저하·E-stop 표시와 화면에 "정지" 단어 없음,
   자동 전환 후 태그 끊김, 실차 환경의 배지·연결 주소·고장 주입 패널 없음, 설정 오류 화면
 - 레이아웃: 휴대폰 세로 390×844, 가로 844×390에서 넘침 없음(수동·자동 모두)

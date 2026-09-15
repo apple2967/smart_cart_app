@@ -92,6 +92,13 @@ enum DriveMode {
   const DriveMode(this.wire);
 
   final String wire;
+
+  /// 모르는 문자열이면 null.
+  static DriveMode? fromWire(String? wire) => switch (wire) {
+        'manual' => DriveMode.manual,
+        'follow' => DriveMode.follow,
+        _ => null,
+      };
 }
 
 class DriveInfo {
@@ -227,6 +234,19 @@ class DriveCommand {
     required this.deadman,
   });
 
+  /// 카트(또는 테스트 서버) 쪽에서 명령을 읽을 때.
+  ///
+  /// 이상한 값은 가장 안전한 쪽으로 읽는다: 모르는 모드는 manual, 범위를 벗어난
+  /// throttle/steer는 0(최대치로 자르지 않음 — 깨진 값을 최대 출력으로 실행하면 안 된다),
+  /// deadman은 true가 확실할 때만 true.
+  factory DriveCommand.fromJson(Map<String, dynamic> j) => DriveCommand(
+        seq: _int(j['seq']) ?? 0,
+        mode: DriveMode.fromWire(_str(j['mode'])) ?? DriveMode.manual,
+        throttle: _unitOrZero(j['throttle']),
+        steer: _unitOrZero(j['steer']),
+        deadman: _bool(j['deadman']) ?? false,
+      );
+
   final int seq;
   final DriveMode mode;
 
@@ -255,5 +275,10 @@ int? _int(Object? v) => v is num ? v.toInt() : null;
 double? _dbl(Object? v) => v is num ? v.toDouble() : null;
 bool? _bool(Object? v) => v is bool ? v : null;
 String? _str(Object? v) => v is String ? v : null;
+
+double _unitOrZero(Object? v) {
+  final d = _dbl(v);
+  return d != null && d.isFinite && d.abs() <= 1 ? d : 0.0;
+}
 
 double _round2(double v) => (v * 100).roundToDouble() / 100;

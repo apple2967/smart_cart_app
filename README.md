@@ -81,20 +81,54 @@ flutter build apk --release     # build/app/outputs/flutter-apk/app-release.apk
 
 설치 중 막히는 부분(스마트 앱 제어, NDK, USB 디버깅)은 [docs/PROMPT.md의 알려진 함정](docs/PROMPT.md#알려진-함정)을 보세요.
 
+## PC 테스트 서버
+
+실제 카트 없이 **실제 Wi-Fi 위에서** 휴대폰 앱을 확인하는 가짜 카트 서버입니다.
+앱의 시뮬레이션과 같은 가짜 카트(`CartSimulator`)를 쓰고, 카트 쪽 서버를 만들 때 통신 규약의 참고 구현이 됩니다.
+
+```bash
+dart run tool/cart_server.dart          # 포트 8765
+```
+
+1. 서버를 켜면 이 PC의 주소 목록이 나옵니다. 휴대폰과 **같은 Wi-Fi**의 주소를 고르세요.
+2. **Windows 방화벽** 창이 뜨면 허용을 눌러야 휴대폰이 붙습니다.
+   PC의 Wi-Fi가 "공용 네트워크"로 설정돼 있으면 막힐 수 있습니다.
+3. 휴대폰 앱을 테스트 서버 빌드로 설치합니다.
+   ```bash
+   flutter run --release --dart-define=CART_ENV=server --dart-define=CART_URL=ws://192.168.0.10:8765
+   ```
+
+서버 창에 명령을 입력하거나, **서버를 실행한 PC의 브라우저**에서 조작합니다. 다른 기기에서는 조작할 수 없습니다.
+
+| 서버 창 명령 | 브라우저 | 하는 일 |
+|---|---|---|
+| `status` | `http://localhost:8765/` | 현재 상태 |
+| `preset good` / `weak` / `bad` | `/preset?name=bad` | 네트워크 프리셋 |
+| `net delay=80 jitter=120 loss=5` | `/net?delay=80&jitter=120&loss=5` | 지연·흔들림·손실 직접 설정 |
+| `hold 1500` | `/hold?ms=1500` | 1.5초 동안 붙잡았다가 한꺼번에 내보냄 (Wi-Fi 음영) |
+| `kick` | `/kick` | 앱 연결 끊기. 앱이 스스로 다시 붙는지 확인 |
+| `fault tag=off estop=on battery=low` | `/fault?tag=off` | 가짜 카트 고장 |
+
+- WebSocket은 TCP라서 **손실은 데이터가 사라지는 게 아니라 멈췄다가 한꺼번에 몰려오는 형태**로 나타납니다. 서버도 그렇게 흉내 냅니다.
+- 음영 뒤 몰려온 **오래된 명령도 카트는 구분하지 못하고 그대로 실행합니다.** 서버는 200ms 넘게 늦은 명령을 경고로 보여줍니다.
+  통신 규약에 보낸 시각이나 유효 기간을 넣어야 하는 이유입니다.
+
 ## 코드 구조
 
 ```
 lib/
-  main.dart                          진입점. 빌드 환경에 따라 전송 방식 선택
-  env.dart                           빌드 환경(CART_ENV, CART_URL) 해석
+  main.dart                          진입점. 빌드 환경에 따라 전송 방식 선택, 앱 수명주기·화면 꺼짐 방지
+  env.dart                           빌드 환경(CART_ENV, CART_URL)과 앱 버전
   theme.dart                         다크 색상·타이포 토큰
   models/telemetry.dart              통신 JSON 모델
+  sim/cart_simulator.dart            가짜 카트 (Flutter 없이 동작, 앱과 PC 서버가 같이 씀)
   transport/transport.dart           CartTransport 인터페이스, CartLink(명령 송신·워치독·모드), MockTransport
   transport/websocket_transport.dart 실차·테스트 서버용 WebSocket 연결 (재접속)
   widgets/lidar_view.dart            라이다 점군
   widgets/joystick.dart              데드맨 조이스틱
   screens/drive_screen.dart          주행 화면
-test/widget_test.dart                파싱·환경·WebSocket·링크·모드·화면·휴대폰 레이아웃 테스트
+tool/cart_server.dart                PC 테스트 서버 (네트워크 흉내, 조작 API)
+test/widget_test.dart                파싱·환경·가짜 카트·서버·링크·모드·수명주기·화면·레이아웃 테스트
 docs/PROMPT.md                       Claude Code로 같은 설계를 재현·확장하는 프롬프트
 ```
 

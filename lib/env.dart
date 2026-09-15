@@ -19,7 +19,7 @@ const cartUrl = String.fromEnvironment('CART_URL');
 const isSimulationBuild = cartEnvName == 'simulation';
 
 /// 앱 버전. pubspec.yaml의 version과 같아야 한다 (테스트로 확인).
-const appVersion = '0.2.0';
+const appVersion = '0.3.0';
 
 enum CartEnv {
   /// 앱 안의 가짜 카트(MockTransport). 실제 카트와 통신하지 않는다.
