@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -36,6 +38,7 @@ class _SmartCartAppState extends State<SmartCartApp> {
   late final EnvConfig _config = widget.config ?? EnvConfig.current;
   CartLink? _link;
   FaultInjection? _faults;
+  AppLifecycleListener? _lifecycle;
 
   @override
   void initState() {
@@ -52,10 +55,37 @@ class _SmartCartAppState extends State<SmartCartApp> {
     } else if (config.url case final url?) {
       _link = CartLink(WebSocketTransport(url));
     }
+
+    if (_link != null) {
+      _lifecycle = AppLifecycleListener(onStateChange: _onLifecycle);
+      // 추종 중에는 화면을 만질 일이 없어서, 화면이 꺼지면 앱이 사라진 것으로 보고 자동이 풀린다.
+      // 조작 화면이 떠 있는 동안은 화면 꺼짐을 막는다. 대신 배터리를 더 쓴다.
+      unawaited(_setScreenAwake(true));
+    }
+  }
+
+  void _onLifecycle(AppLifecycleState state) {
+    final link = _link;
+    if (link == null) return;
+    switch (state) {
+      case AppLifecycleState.inactive:
+        // 알림창·전화 화면이 위에 뜸
+        link.pauseControl(hidden: false);
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        // 홈·앱 전환·화면 꺼짐
+        link.pauseControl(hidden: true);
+      case AppLifecycleState.resumed:
+        // 돌아와도 아무것도 재개하지 않는다. 조이스틱은 새로 눌러야 하고 자동은 다시 켜야 한다.
+        break;
+    }
   }
 
   @override
   void dispose() {
+    _lifecycle?.dispose();
+    if (_link != null) unawaited(_setScreenAwake(false));
     _link?.dispose();
     super.dispose();
   }
@@ -80,6 +110,21 @@ class _SmartCartAppState extends State<SmartCartApp> {
               faultInjection: _faults,
             ),
     );
+  }
+}
+
+/// 안드로이드 MainActivity가 받아서 창의 FLAG_KEEP_SCREEN_ON을 켜고 끈다.
+/// 플러그인을 쓰지 않는 이유: Windows에서 네이티브 플러그인을 빌드하려면 개발자 모드가 필요하다.
+const _screenChannel = MethodChannel('smart_cart/screen');
+
+/// 화면 꺼짐 방지. 편의 기능이라 지원하지 않는 환경(Windows, 테스트)에서는 조용히 넘어간다.
+Future<void> _setScreenAwake(bool on) async {
+  try {
+    await _screenChannel.invokeMethod<void>('keepOn', on);
+  } on MissingPluginException {
+    // 안드로이드 외 플랫폼
+  } on PlatformException {
+    // 조작과 무관한 기능이라 무시
   }
 }
 
@@ -123,6 +168,8 @@ class _ConfigErrorScreen extends StatelessWidget {
                   fontFamily: 'monospace',
                 ),
               ),
+              const SizedBox(height: 24),
+              const Text('v$appVersion', style: CartText.label),
             ],
           ),
         ),

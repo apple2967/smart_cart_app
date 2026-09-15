@@ -95,6 +95,8 @@ class DriveScreen extends StatelessWidget {
                         _gap,
                         _FaultInjectionCard(faults: fi),
                       ],
+                      _gap,
+                      _BuildInfo(env: env, target: target),
                     ],
                   ),
                 ),
@@ -129,6 +131,8 @@ class DriveScreen extends StatelessWidget {
                 _gap,
                 _FaultInjectionCard(faults: fi),
               ],
+              _gap,
+              _BuildInfo(env: env, target: target),
             ],
           ),
         ),
@@ -226,6 +230,24 @@ class _EnvBadge extends StatelessWidget {
   }
 }
 
+/// 앱 버전·빌드 환경·연결 대상. 필드에서 문제가 났을 때 어느 빌드였는지 알 수 있게.
+class _BuildInfo extends StatelessWidget {
+  const _BuildInfo({required this.env, required this.target});
+
+  final CartEnv env;
+  final Uri? target;
+
+  @override
+  Widget build(BuildContext context) {
+    final target = this.target;
+    return Text(
+      ['v$appVersion', env.label, if (target != null) '$target'].join(' · '),
+      style: CartText.label,
+      textAlign: TextAlign.center,
+    );
+  }
+}
+
 class _Alerts extends StatelessWidget {
   const _Alerts({required this.link, required this.target});
 
@@ -265,6 +287,7 @@ class _Alerts extends StatelessWidget {
                 ? '카트가 수동으로 돌아갔습니다'
                 : '태그 신호가 끊겨 카트가 수동으로 돌아갔습니다',
             ModeDrop.linkLost => '연결이 끊겨 수동으로 돌아갔습니다. 다시 연결돼도 자동은 재개하지 않습니다',
+            ModeDrop.appHidden => '앱이 화면에서 사라져 수동으로 돌아갔습니다. 돌아와도 자동은 재개하지 않습니다',
           },
         ),
       if (power != null && power.driveCutOff)

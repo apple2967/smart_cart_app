@@ -47,6 +47,9 @@ enum ModeDrop {
 
   /// 텔레메트리 끊김.
   linkLost,
+
+  /// 앱이 화면에서 사라짐 (홈 버튼, 앱 전환, 화면 꺼짐).
+  appHidden,
 }
 
 /// 전송 방식과 무관한 링크 관리: 20Hz 명령 송신, 텔레메트리 워치독, 모드 전환.
@@ -158,6 +161,24 @@ class CartLink extends ChangeNotifier {
     _needsRelift = false;
     _clearStick();
     _sendCommand();
+  }
+
+  /// 앱이 화면에서 가려질 때 호출.
+  ///
+  /// 가려지기만 한 경우(알림창, 전화 화면이 위에 뜸): 조이스틱만 해제하고 자동 추종은 유지한다.
+  /// 아예 사라진 경우([hidden]: 홈, 앱 전환, 화면 꺼짐): 사람이 카트를 보고 있다고 볼 수
+  /// 없으므로 자동도 내린다. 돌아와도 자동은 스스로 재개하지 않는다.
+  void pauseControl({required bool hidden}) {
+    final wasHeld = _deadman;
+    _clearStick();
+    // 시스템이 손가락 떼기를 전달하지 않았을 수 있다. 돌아와서 스틱이 밀린 채면 한 번 떼야 한다.
+    if (wasHeld) _needsRelift = true;
+    if (hidden && _requestedMode == DriveMode.follow) {
+      _dropToManual(ModeDrop.appHidden);
+    } else {
+      _sendCommand();
+    }
+    notifyListeners();
   }
 
   void _clearStick() {

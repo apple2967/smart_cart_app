@@ -120,6 +120,13 @@ void main() {
       expect(c.env, isNull);
       expect(c.error, isNotNull);
     });
+
+    test('앱에 표시하는 버전이 pubspec.yaml과 같다', () {
+      final pubspec = File('pubspec.yaml').readAsStringSync();
+      final match = RegExp(r'^version:\s*([0-9.]+)\+', multiLine: true)
+          .firstMatch(pubspec);
+      expect(match?.group(1), appVersion);
+    });
   });
 
   // 실제 소켓을 쓰므로 가짜 시계(testWidgets)가 아니라 일반 test로 돌린다.
@@ -269,6 +276,37 @@ void main() {
     link.dispose();
   });
 
+  testWidgets('CartLink: 앱이 가려지면 조작 해제, 사라지면 자동도 해제', (tester) async {
+    final fake = _FakeTransport();
+    final link = CartLink(fake);
+    fake.controller.add(_telemetry());
+    await tester.pump();
+
+    // 누르던 중 가려짐 → 즉시 deadman:false. 돌아와서 스틱이 밀린 채면 무시
+    link.hold(0.4, 0);
+    link.pauseControl(hidden: false);
+    expect(fake.sent.last.deadman, isFalse);
+    link.hold(0.4, 0);
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(fake.sent.last.deadman, isFalse);
+    link.release();
+
+    // 자동 중 가려지기만 하면(알림창·전화) 유지
+    expect(link.requestMode(DriveMode.follow), isTrue);
+    fake.controller.add(_telemetry(mode: 'follow'));
+    await tester.pump();
+    link.pauseControl(hidden: false);
+    expect(link.requestedMode, DriveMode.follow);
+
+    // 사라지면(홈·앱 전환·화면 꺼짐) 수동으로
+    link.pauseControl(hidden: true);
+    expect(link.requestedMode, DriveMode.manual);
+    expect(link.modeDrop, ModeDrop.appHidden);
+    expect(fake.sent.last.mode, DriveMode.manual);
+
+    link.dispose();
+  });
+
   testWidgets('좁은 화면: 시뮬레이션 배지, 통신 끊기 토글로 연결 끊김 화면 전환',
       (tester) async {
     _setSurface(tester, const Size(800, 1600));
@@ -277,6 +315,7 @@ void main() {
     expect(find.text('연결 중'), findsOneWidget);
     expect(find.text('시뮬레이션'), findsOneWidget);
     expect(find.text('앱 안의 가짜 카트를 기다리는 중입니다'), findsOneWidget);
+    expect(find.text('v$appVersion · 시뮬레이션'), findsOneWidget);
 
     await tester.pump(const Duration(milliseconds: 250));
     expect(find.text('연결됨'), findsOneWidget);
@@ -328,6 +367,35 @@ void main() {
     expect(find.text('자동 전환 불가 · 태그 신호 없음'), findsOneWidget);
   });
 
+  testWidgets('앱 수명주기: 알림창에는 자동 유지, 홈으로 나가면 자동 해제', (tester) async {
+    _setSurface(tester, const Size(1280, 1200));
+
+    await tester.pumpWidget(const SmartCartApp());
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.tap(find.text('자동'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('태그 추종 중'), findsOneWidget);
+
+    // 알림창을 내렸다 올림: 자동 유지
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('태그 추종 중'), findsOneWidget);
+
+    // 홈으로 나갔다가 돌아옴: 자동 해제, 저절로 재개하지 않음
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('자동 모드 해제됨'), findsOneWidget);
+    expect(
+      find.text('앱이 화면에서 사라져 수동으로 돌아갔습니다. 돌아와도 자동은 재개하지 않습니다'),
+      findsOneWidget,
+    );
+    expect(find.text('수동 주행'), findsOneWidget);
+  });
+
   testWidgets('실차 환경: 주의색 배지와 연결 주소가 보이고 고장 주입 패널은 없다',
       (tester) async {
     _setSurface(tester, const Size(1280, 1200));
@@ -343,7 +411,9 @@ void main() {
     ));
     expect(find.text('실차'), findsOneWidget);
     expect(find.text('시뮬레이션'), findsNothing);
-    expect(find.textContaining('ws://192.168.4.1:8765'), findsOneWidget);
+    // 연결 중 안내 + 하단 빌드 정보
+    expect(find.textContaining('ws://192.168.4.1:8765'), findsNWidgets(2));
+    expect(find.text('v$appVersion · 실차 · ws://192.168.4.1:8765'), findsOneWidget);
     expect(find.text('고장 주입 · Mock 전용'), findsNothing);
 
     await tester.pumpWidget(const SizedBox());

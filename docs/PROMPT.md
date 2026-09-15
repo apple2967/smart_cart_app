@@ -19,6 +19,9 @@
 - **NDK 자동 설치 실패**: 첫 안드로이드 빌드 때 Gradle이 NDK를 자동으로 받으려다 `sdkmanager`가 비정상 종료할 수 있습니다.
   Android Studio → Settings → Android SDK → SDK Tools → **Show Package Details**에서 NDK를 직접 설치하고,
   `android/app/build.gradle.kts`의 `ndkVersion`을 설치한 버전으로 맞추세요.
+- **Windows 개발자 모드**: 네이티브 코드가 들어간 Flutter 플러그인을 추가하면
+  `Building with plugins requires symlink support`로 멈춥니다. 설정 → 시스템 → 개발자용 → 개발자 모드를 켜거나,
+  이 저장소처럼 플러그인 없이 안드로이드 코드(MethodChannel)로 직접 구현하세요.
 - **삼성 자동 차단기**가 켜져 있으면 USB 디버깅이 막힙니다. 설정 → 보안 및 개인정보 보호 → 자동 차단기.
 - **안드로이드 인터넷 권한**: Flutter 기본 템플릿은 개발용 빌드에만 INTERNET 권한을 넣습니다.
   `android/app/src/main/AndroidManifest.xml`에 없으면 릴리스 APK에서만 연결이 안 됩니다. (이 저장소에는 추가되어 있음)
@@ -121,6 +124,16 @@ WebSocket 텍스트 프레임 하나에 JSON 하나.
 - 한 번 풀린 자동은 조건이 돌아와도 스스로 재개하지 않는다. 사람이 다시 눌러야 한다.
 - 자동 중에는 조이스틱 자리에 태그 방향 원을 표시하고 조이스틱은 잠금.
 - 상단 모드 표시는 요청한 모드가 아니라 카트가 보고한 모드.
+
+## 휴대폰 상태 처리
+- AppLifecycleListener로 앱 상태를 받아 CartLink.pauseControl(hidden:)을 호출.
+  - inactive(알림창·전화 화면이 위에 뜸): 조이스틱 즉시 해제, 자동 추종은 유지.
+  - hidden·paused·detached(홈·앱 전환·화면 꺼짐): 조이스틱 해제 + 자동이면 수동으로(ModeDrop.appHidden).
+  - resumed: 아무것도 재개하지 않음. 누르던 중이었다면 손을 한 번 떼야 조이스틱 동작.
+- 조작 화면이 떠 있는 동안 화면 꺼짐 방지. 추종 중엔 화면을 안 만지므로 없으면 화면이 꺼지는 순간 자동이 풀린다.
+  안드로이드 MainActivity에서 MethodChannel("smart_cart/screen")의 "keepOn"으로 FLAG_KEEP_SCREEN_ON을 켜고 끈다.
+  (wakelock 플러그인은 Windows에서 개발자 모드가 필요해서 쓰지 않음. Windows·테스트에서는 MissingPluginException을 무시.)
+- 화면 맨 아래에 "v버전 · 환경 · 연결 주소" 표시. 버전 상수(appVersion)는 pubspec.yaml version과 같아야 하고 테스트로 확인.
 
 ## 화면
 - 폭 960 이상이거나 가로가 세로보다 긴 화면(휴대폰 가로 포함): 좌우 배치.
